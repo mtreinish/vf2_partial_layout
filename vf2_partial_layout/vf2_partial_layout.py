@@ -13,8 +13,10 @@
 """VF2Layout pass to find a layout using subgraph isomorphism"""
 from collections import defaultdict
 import logging
+import math
 import time
 
+import numpy as np
 import rustworkx as rx
 
 from qiskit.transpiler.layout import Layout
@@ -311,7 +313,32 @@ class VF2PartialLayout(AnalysisPass):
         chosen_layout_virtual_bits = chosen_layout.get_virtual_bits()
         for qubit in dag.qubits:
             if qubit not in chosen_layout_virtual_bits:
-                chosen_layout.add(qubit)
+                self.find_lowest_error_nearest_neighbor(qubit, chosen_layout)
         self.property_set["layout"] = chosen_layout
         for reg in dag.qregs.values():
             self.property_set["layout"].add_register(reg)
+
+    def find_lowest_error_nearest_neighbor(self, qubit, chosen_layout):
+        physical_bits = chosen_layout.get_physical_bits()
+        distance_matrix = self.coupling_map.distance_matrix
+        nearest_neighbors = set()
+        shortest_distance = math.inf
+        for bit in physical_bits:
+            neighborhood = distance_matrix[bit]
+            for neighbor_bit, distance in enumerate(neighborhood):
+                if neighbor_bit not in physical_bits and distance > 0:
+                    if distance < shortest_distance:
+                        nearest_neighbors = {
+                            neighbor_bit,
+                        }
+                        shortest_distance = distance
+                    elif distance == shortest_distance:
+                        nearest_neighbors.add(neighbor_bit)
+        rng = np.random.default_rng(self.seed)
+        if self.avg_error_map:
+            chosen_bit = min(
+                nearest_neighbors, key=lambda x: self.avg_error_map.get((x,), 0.0)
+            )
+        else:
+            chosen_bit = rng.choice(list(nearest_neighbors))
+        chosen_layout.add(qubit, chosen_bit)
